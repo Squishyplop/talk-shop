@@ -1,0 +1,33 @@
+[project]
+name = "talk-shop"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "frozen_owl", email = "regule@runbox.com" }
+]
+requires-python = ">=3.13"
+dependencies = []
+
+[project.scripts]
+talk-shop = "talk_shop:main"
+
+[build-system]
+requires = ["uv_build>=0.12.13,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+  "ruff",
+  "mypy",
+  "pytest",
+  "pytest-cov",
+  "coverage",
+  "pre-commit",
+  "ipython"
+]
+
+nlp = [
+    "lark"
+]
+

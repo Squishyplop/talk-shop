@@ -1,13 +1,12 @@
-# =====================================================================================
-#                                    INCLUDES
-# =====================================================================================
 from __future__ import annotations
-from dataclasses import dataclass
-from sqlalchemy import String, Float, Integer, create_engine, select
-from sqlalchemy.engine.base import Engine
-from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from collections.abc import Sequence
+from dataclasses import dataclass
+
+from sqlalchemy import Float, Integer, String, create_engine, select
+from sqlalchemy.engine.base import Engine
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 
 # =====================================================================================
@@ -38,9 +37,9 @@ class ProductModel(DatabaseModel):
     __tablename__ = "products"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str] = mapped_column(String(100))
-    price: Mapped[float] = mapped_column(Float())
-    stock: Mapped[int] = mapped_column(Integer())
+    name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    price: Mapped[float] = mapped_column(Float(), nullable=False)
+    stock: Mapped[int] = mapped_column(Integer(), nullable=False)
 
     @staticmethod
     def to_model(product: Product) -> ProductModel:
@@ -50,41 +49,109 @@ class ProductModel(DatabaseModel):
         return Product(name=self.name, price=self.price, stock=self.stock)
 
 
-def prepare_db() -> Engine:
-    engine = create_engine("sqlite:///local/demo.db")
-    DatabaseModel.metadata.create_all(engine)
-    return engine
+class Database:
+    def __init__(self, db_url: str = "sqlite:///shop.db") -> None:
+        self.engine: Engine = create_engine(db_url)
+        DatabaseModel.metadata.create_all(self.engine)
 
+    def add_product(self, name: str, price: float, stock: int) -> bool:
+        """Dodaje nowy produkt do bazy danych."""
+        try:
+            with Session(self.engine) as session:
+                existing = session.scalars(
+                    select(ProductModel).where(ProductModel.name.ilike(name.strip()))
+                ).first()
+                if existing:
+                    print(f"Błąd: Produkt '{name}' już istnieje w bazie.")
+                    return False
 
-def populate_db(eng: Engine) -> None:
-    with Session(eng) as session:
-        for product in example_data:
-            session.add(ProductModel.to_model(product))
-        session.commit()
+                new_product = ProductModel(name=name.strip(), price=price, stock=stock)
+                session.add(new_product)
+                session.commit()
+                return True
+        except SQLAlchemyError as e:
+            print(f"Błąd podczas dodawania produktu: {e}")
+            return False
 
-def clear_db(eng: Engine)-> None:
-    with Session(eng) as session:
-        session.query(ProductModel).delete(synchronize_session="fetch")
-        session.commit()
+    def get_product(self, name: str) -> Product | None:
+        """Pobiera produkt po nazwie (niezależnie od wielkości liter)."""
+        try:
+            with Session(self.engine) as session:
+                prod_model = session.scalars(
+                    select(ProductModel).where(ProductModel.name.ilike(name.strip()))
+                ).first()
+                if prod_model:
+                    return prod_model.from_model()
+                return None
+        except SQLAlchemyError as e:
+            print(f"Błąd bazy danych przy wyszukiwaniu: {e}")
+            return None
 
-def retrieve_product_by_name(eng: Engine, name: str) -> list[Product]:
-    prods: list[Product] = []
-    with Session(eng) as session:
-        products: Sequence[ProductModel] = session.scalars(
-            select(ProductModel).where(ProductModel.name == name)
-        ).all()
-        for product in products:
-            prods.append(product.from_model())
-    return prods
+    def update_product(
+        self, name: str, price: float | None = None, stock: int | None = None
+    ) -> bool:
+        """Aktualizuje cenę lub/i stan magazynowy produktu."""
+        try:
+            with Session(self.engine) as session:
+                prod_model = session.scalars(
+                    select(ProductModel).where(ProductModel.name.ilike(name.strip()))
+                ).first()
+                if not prod_model:
+                    print(f"Błąd: Produkt '{name}' nie istnieje w bazie.")
+                    return False
 
-def main() -> None:
-    eng = prepare_db()
-    clear_db(eng)
-    populate_db(eng)
-    prods = retrieve_product_by_name(eng, "Monorail")
-    for prod in prods:
-        print(prod)
+                if price is not None:
+                    prod_model.price = price
+                if stock is not None:
+                    prod_model.stock = stock
 
+                session.commit()
+                return True
+        except SQLAlchemyError as e:
+            print(f"Błąd podczas edycji produktu: {e}")
+            return False
 
-if __name__ == "__main__":
-    main()
+    def delete_product(self, name: str) -> bool:
+        """Usuwa produkt z bazy danych."""
+        try:
+            with Session(self.engine) as session:
+                prod_model = session.scalars(
+                    select(ProductModel).where(ProductModel.name.ilike(name.strip()))
+                ).first()
+                if not prod_model:
+                    print(f"Błąd: Produkt '{name}' nie istnieje.")
+                    return False
+
+                session.delete(prod_model)
+                session.commit()
+                return True
+        except SQLAlchemyError as e:
+            print(f"Błąd podczas usuwania produktu: {e}")
+            return False
+
+    def get_all_products(self) -> list[Product]:
+        """Zwraca listę wszystkich produktów."""
+        try:
+            with Session(self.engine) as session:
+                products: Sequence[ProductModel] = session.scalars(select(ProductModel)).all()
+                return [p.from_model() for p in products]
+        except SQLAlchemyError as e:
+            print(f"Błąd podczas pobierania listy produktów: {e}")
+            return []
+
+    def clear_database(self) -> bool:
+        """Czyszczenie całej bazy danych."""
+        try:
+            with Session(self.engine) as session:
+                session.query(ProductModel).delete(synchronize_session="fetch")
+                session.commit()
+                return True
+        except SQLAlchemyError as e:
+            print(f"Błąd podczas czyszczenia bazy danych: {e}")
+            return False
+
+    def seed_example_data(self) -> None:
+        """Wypełnia bazę początkowymi danymi, jeśli jest pusta."""
+        if not self.get_all_products():
+            for p in example_data:
+                self.add_product(p.name, p.price, p.stock)
